@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Playlist Quick Delete Button
 // @namespace    http://tampermonkey.net/
-// @version      3.0
+// @version      4.0
 // @description  Adds a one-click "Delete" button to each playlist video row so you don't have to open the "..." menu to remove it.
 // @author       you
 // @match        https://www.youtube.com/playlist*
