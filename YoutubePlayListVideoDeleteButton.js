@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Playlist Quick Delete Button
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      2.0
 // @description  Adds a one-click "Delete" button to each playlist video row so you don't have to open the "..." menu to remove it.
 // @author       you
 // @match        https://www.youtube.com/playlist*
@@ -82,51 +82,88 @@
     }
 
     function closeAnyOpenMenu() {
-        document.body.click(); // outside click closes iron-dropdown popups
+        // Escape reliably closes YouTube's iron-dropdown popups; body.click()
+        // is kept as a fallback for the rare cases Escape doesn't register.
+        document.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'Escape',
+            code: 'Escape',
+            keyCode: 27,
+            which: 27,
+            bubbles: true,
+            cancelable: true,
+        }));
+        document.body.click();
     }
+
+    // YouTube reuses a single shared popup/dropdown instance for every row's
+    // "..." menu. If two deletions were allowed to run at once, the second
+    // row's menuButton.click() could repopulate that shared popup while the
+    // first deletion is still waiting for it, causing the wrong item (or
+    // nothing) to be clicked. This lock forces deletions to run one at a time.
+    let isBusy = false;
 
     async function deleteVideo(row, btn) {
-        const menuButton = findMenuButton(row);
-        if (!menuButton) {
-            console.warn('[YT Quick Delete] Could not find "..." menu button for row', row);
-            return;
-        }
+        if (isBusy) return;
+        isBusy = true;
 
-        btn.disabled = true;
         const originalLabel = btn.textContent;
-        btn.textContent = '...';
+        try {
+            if (!document.body.contains(row)) return;
 
-        menuButton.click();
+            const menuButton = findMenuButton(row);
+            if (!menuButton) {
+                console.warn('[YT Quick Delete] Could not find "..." menu button for row', row);
+                return;
+            }
 
-        // Wait for the popup menu to render, then click the "Remove from" item.
-        const removeItem = await waitFor(findRemoveMenuItem, 2000);
-        if (removeItem) {
-            removeItem.click();
-            // Row removes itself from the DOM once YouTube processes the action.
-        } else {
-            console.warn('[YT Quick Delete] Could not find "Remove from..." menu item.');
-            closeAnyOpenMenu();
-            btn.disabled = false;
-            btn.textContent = originalLabel;
+            btn.disabled = true;
+            btn.textContent = '...';
+
+            menuButton.click();
+
+            const removeItem = await waitForRemoveMenuItem(2000);
+            if (removeItem) {
+                removeItem.click();
+                // Row removes itself from the DOM once YouTube processes the action.
+            } else {
+                console.warn('[YT Quick Delete] Could not find "Remove from..." menu item.');
+                closeAnyOpenMenu();
+                if (document.body.contains(btn)) {
+                    btn.disabled = false;
+                    btn.textContent = originalLabel;
+                }
+            }
+        } finally {
+            isBusy = false;
         }
     }
 
-    function waitFor(fn, timeoutMs) {
+    // Waits for the "Remove from..." item to appear via MutationObserver
+    // (reacting to the popup actually rendering) instead of blind polling.
+    function waitForRemoveMenuItem(timeoutMs) {
         return new Promise((resolve) => {
-            const start = Date.now();
-            const tick = () => {
-                const result = fn();
-                if (result) {
-                    resolve(result);
-                    return;
-                }
-                if (Date.now() - start >= timeoutMs) {
-                    resolve(null);
-                    return;
-                }
-                requestAnimationFrame(tick);
+            const existing = findRemoveMenuItem();
+            if (existing) {
+                resolve(existing);
+                return;
+            }
+
+            let settled = false;
+            const finish = (result) => {
+                if (settled) return;
+                settled = true;
+                observer.disconnect();
+                clearTimeout(timer);
+                resolve(result);
             };
-            tick();
+
+            const observer = new MutationObserver(() => {
+                const item = findRemoveMenuItem();
+                if (item) finish(item);
+            });
+            observer.observe(document.body, { childList: true, subtree: true });
+
+            const timer = setTimeout(() => finish(null), timeoutMs);
         });
     }
 
