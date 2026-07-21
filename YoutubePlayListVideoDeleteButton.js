@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Playlist Quick Delete Button
 // @namespace    http://tampermonkey.net/
-// @version      2.0
+// @version      3.0
 // @description  Adds a one-click "Delete" button to each playlist video row so you don't have to open the "..." menu to remove it.
 // @author       you
 // @match        https://www.youtube.com/playlist*
@@ -205,6 +205,14 @@
                     scanForRows(node);
                 }
             }
+
+            // A row's internals can be re-rendered by YouTube (e.g. other rows
+            // rebind when a sibling is removed from the list) without the row
+            // element itself being re-added, which silently wipes our injected
+            // button. Re-check the mutated node's own row for a missing button.
+            const target = mutation.target;
+            const ownRow = target instanceof HTMLElement ? target.closest(ROW_SELECTOR) : null;
+            if (ownRow) addButtonToRow(ownRow);
         }
     });
     observer.observe(document.documentElement, { childList: true, subtree: true });
