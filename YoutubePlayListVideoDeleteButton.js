@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Playlist Quick Delete Button
 // @namespace    http://tampermonkey.net/
-// @version      7.0
+// @version      8.0
 // @description  Adds a one-click "Delete" button to each playlist video row so you don't have to open the "..." menu to remove it.
 // @author       you
 // @match        https://www.youtube.com/playlist*
@@ -183,32 +183,27 @@
         }
     }
 
-    // Waits for the "Remove from..." item to appear via MutationObserver
-    // (reacting to the popup actually rendering) instead of blind polling.
+    // Poll every animation frame instead of using a childList-only
+    // MutationObserver: YouTube's reused singleton popup sometimes
+    // repopulates by mutating existing nodes' text/attributes rather than
+    // adding new ones, which a childList observer never sees, causing
+    // intermittent timeouts. Polling re-checks regardless of what changed.
     function waitForRemoveMenuItem(timeoutMs) {
         return new Promise((resolve) => {
-            const existing = findRemoveMenuItem();
-            if (existing) {
-                resolve(existing);
-                return;
-            }
-
-            let settled = false;
-            const finish = (result) => {
-                if (settled) return;
-                settled = true;
-                observer.disconnect();
-                clearTimeout(timer);
-                resolve(result);
-            };
-
-            const observer = new MutationObserver(() => {
+            const start = Date.now();
+            const tick = () => {
                 const item = findRemoveMenuItem();
-                if (item) finish(item);
-            });
-            observer.observe(document.body, { childList: true, subtree: true });
-
-            const timer = setTimeout(() => finish(null), timeoutMs);
+                if (item) {
+                    resolve(item);
+                    return;
+                }
+                if (Date.now() - start >= timeoutMs) {
+                    resolve(null);
+                    return;
+                }
+                requestAnimationFrame(tick);
+            };
+            tick();
         });
     }
 
