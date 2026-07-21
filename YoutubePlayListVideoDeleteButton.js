@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Playlist Quick Delete Button
 // @namespace    http://tampermonkey.net/
-// @version      6.0
+// @version      7.0
 // @description  Adds a one-click "Delete" button to each playlist video row so you don't have to open the "..." menu to remove it.
 // @author       you
 // @match        https://www.youtube.com/playlist*
@@ -94,12 +94,32 @@
         return Array.from(document.querySelectorAll('tp-yt-iron-dropdown')).filter(isVisible);
     }
 
-    // Because the popup is a reused singleton, trying to close only "the
-    // dropdown we think we just used" can race with it already being
-    // reopened for the next row. Instead, close whatever is *actually*
-    // visibly open right now, and retry briefly in case the close is still
-    // mid-animation.
-    async function closeAnyOpenMenu(timeoutMs = 500) {
+    // Trying to open the real "..." popup and then close it fast enough is a
+    // losing timing race against YouTube's own open/close animations. Instead,
+    // keep the popup visually hidden (via CSS, not display:none, so layout/
+    // positioning still work) for the whole automated interaction, so the
+    // user never sees it appear at all. hidePopupUi(false) restores it.
+    let hideStyleEl = null;
+    function hidePopupUi(hidden) {
+        if (hidden) {
+            if (hideStyleEl) return;
+            hideStyleEl = document.createElement('style');
+            hideStyleEl.textContent = `
+                tp-yt-iron-dropdown, ytd-popup-container {
+                    visibility: hidden !important;
+                }
+            `;
+            document.head.appendChild(hideStyleEl);
+        } else if (hideStyleEl) {
+            hideStyleEl.remove();
+            hideStyleEl = null;
+        }
+    }
+
+    // Best-effort: reset the shared popup's internal open/close state so the
+    // next open behaves normally. Not relied on for visual correctness since
+    // the popup stays hidden via CSS the whole time anyway.
+    function closeAnyOpenMenu() {
         document.dispatchEvent(new KeyboardEvent('keydown', {
             key: 'Escape',
             code: 'Escape',
@@ -109,16 +129,9 @@
             cancelable: true,
         }));
         document.body.click();
-
-        const start = Date.now();
-        while (Date.now() - start < timeoutMs) {
-            const open = findOpenDropdowns();
-            if (open.length === 0) return;
-            open.forEach((d) => {
-                if (typeof d.close === 'function') d.close();
-            });
-            await new Promise((resolve) => requestAnimationFrame(resolve));
-        }
+        findOpenDropdowns().forEach((d) => {
+            if (typeof d.close === 'function') d.close();
+        });
     }
 
     // YouTube reuses a single shared popup/dropdown instance for every row's
@@ -145,22 +158,25 @@
             btn.disabled = true;
             btn.textContent = '...';
 
-            menuButton.click();
+            hidePopupUi(true);
+            try {
+                menuButton.click();
 
-            const removeItem = await waitForRemoveMenuItem(2000);
-            if (removeItem) {
-                removeItem.click();
-                // Row removes itself from the DOM once YouTube processes the
-                // action, but the popup doesn't reliably self-close when the
-                // click is synthetic, so close it explicitly.
-                await closeAnyOpenMenu();
-            } else {
-                console.warn('[YT Quick Delete] Could not find "Remove from..." menu item.');
-                await closeAnyOpenMenu();
-                if (document.body.contains(btn)) {
-                    btn.disabled = false;
-                    btn.textContent = originalLabel;
+                const removeItem = await waitForRemoveMenuItem(2000);
+                if (removeItem) {
+                    removeItem.click();
+                    // Row removes itself from the DOM once YouTube processes
+                    // the action.
+                } else {
+                    console.warn('[YT Quick Delete] Could not find "Remove from..." menu item.');
+                    if (document.body.contains(btn)) {
+                        btn.disabled = false;
+                        btn.textContent = originalLabel;
+                    }
                 }
+                closeAnyOpenMenu();
+            } finally {
+                hidePopupUi(false);
             }
         } finally {
             isBusy = false;
