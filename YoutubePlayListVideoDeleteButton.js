@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Playlist Quick Delete Button
 // @namespace    http://tampermonkey.net/
-// @version      5.0
+// @version      6.0
 // @description  Adds a one-click "Delete" button to each playlist video row so you don't have to open the "..." menu to remove it.
 // @author       you
 // @match        https://www.youtube.com/playlist*
@@ -67,12 +67,21 @@
         );
     }
 
+    // YouTube reuses a single shared popup instance across all rows, so a
+    // hidden/closed leftover item from a previous open can still be sitting
+    // in the DOM (and matching by text) when the next popup opens. Filter to
+    // only items that are actually rendered/visible right now.
+    function isVisible(el) {
+        return !!el && el.getClientRects().length > 0;
+    }
+
     function findRemoveMenuItem() {
         const items = document.querySelectorAll(
             'ytd-menu-popup-renderer ytd-menu-service-item-renderer, ' +
             'tp-yt-paper-listbox ytd-menu-service-item-renderer'
         );
         for (const item of items) {
+            if (!isVisible(item)) continue;
             const text = (item.textContent || '').trim().toLowerCase();
             if (REMOVE_TEXT_MATCHERS.some((m) => text.includes(m.toLowerCase()))) {
                 return item;
@@ -81,17 +90,16 @@
         return null;
     }
 
-    function closeAnyOpenMenu(fromEl) {
-        // Most reliable: the popup lives inside a tp-yt-iron-dropdown, which
-        // (like Polymer's iron-overlay-behavior) exposes a direct .close()
-        // method. Synthetic Escape/click events don't reliably trigger
-        // YouTube's outside-click detection, so prefer calling this directly.
-        const dropdown = fromEl && fromEl.closest ? fromEl.closest('tp-yt-iron-dropdown') : null;
-        if (dropdown && typeof dropdown.close === 'function') {
-            dropdown.close();
-        }
+    function findOpenDropdowns() {
+        return Array.from(document.querySelectorAll('tp-yt-iron-dropdown')).filter(isVisible);
+    }
 
-        // Fallbacks in case the dropdown wasn't found or didn't fully close.
+    // Because the popup is a reused singleton, trying to close only "the
+    // dropdown we think we just used" can race with it already being
+    // reopened for the next row. Instead, close whatever is *actually*
+    // visibly open right now, and retry briefly in case the close is still
+    // mid-animation.
+    async function closeAnyOpenMenu(timeoutMs = 500) {
         document.dispatchEvent(new KeyboardEvent('keydown', {
             key: 'Escape',
             code: 'Escape',
@@ -101,6 +109,16 @@
             cancelable: true,
         }));
         document.body.click();
+
+        const start = Date.now();
+        while (Date.now() - start < timeoutMs) {
+            const open = findOpenDropdowns();
+            if (open.length === 0) return;
+            open.forEach((d) => {
+                if (typeof d.close === 'function') d.close();
+            });
+            await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
     }
 
     // YouTube reuses a single shared popup/dropdown instance for every row's
@@ -131,17 +149,14 @@
 
             const removeItem = await waitForRemoveMenuItem(2000);
             if (removeItem) {
-                // Grab the dropdown ancestor before clicking, in case the
-                // click detaches/moves removeItem before we can look it up.
-                const dropdown = removeItem.closest('tp-yt-iron-dropdown');
                 removeItem.click();
                 // Row removes itself from the DOM once YouTube processes the
                 // action, but the popup doesn't reliably self-close when the
                 // click is synthetic, so close it explicitly.
-                closeAnyOpenMenu(dropdown);
+                await closeAnyOpenMenu();
             } else {
                 console.warn('[YT Quick Delete] Could not find "Remove from..." menu item.');
-                closeAnyOpenMenu();
+                await closeAnyOpenMenu();
                 if (document.body.contains(btn)) {
                     btn.disabled = false;
                     btn.textContent = originalLabel;
