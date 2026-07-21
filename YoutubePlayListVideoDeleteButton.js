@@ -124,7 +124,10 @@
             const removeItem = await waitForRemoveMenuItem(2000);
             if (removeItem) {
                 removeItem.click();
-                // Row removes itself from the DOM once YouTube processes the action.
+                // Row removes itself from the DOM once YouTube processes the
+                // action, but the popup doesn't reliably self-close when the
+                // click is synthetic, so close it explicitly.
+                closeAnyOpenMenu();
             } else {
                 console.warn('[YT Quick Delete] Could not find "Remove from..." menu item.');
                 closeAnyOpenMenu();
