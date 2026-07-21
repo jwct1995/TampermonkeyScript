@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Quality Switcher Buttons
 // @namespace    http://tampermonkey.net/
-// @version      2.0
+// @version      3.0
 // @description  Adds one-click buttons on the YouTube player to jump straight to a specific video quality, including HDR labeling (only qualities above 480p are shown).
 // @author       you
 // @match        https://www.youtube.com/watch*
@@ -34,14 +34,11 @@
     const style = document.createElement('style');
     style.textContent = `
         #${PANEL_ID} {
-            position: absolute;
-            top: 8px;
-            right: 8px;
-            z-index: 60;
             display: flex;
-            flex-direction: column;
-            gap: 4px;
-            align-items: flex-end;
+            flex-direction: row;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin: 8px 0;
         }
         #${PANEL_ID} button {
             padding: 4px 10px;
@@ -107,7 +104,7 @@
         return player.getAvailableQualityLevels().map((quality) => ({ quality, qualityLabel: '' }));
     }
 
-    function buildPanel(player, container) {
+    function buildPanel(player, titleAnchor) {
         const seen = new Set();
         const entries = getQualityData(player).filter((d) => {
             const info = QUALITY_INFO[d.quality];
@@ -126,7 +123,12 @@
         if (!panel) {
             panel = document.createElement('div');
             panel.id = PANEL_ID;
-            container.appendChild(panel);
+        }
+
+        // Keep the panel pinned directly above the title, even if YouTube
+        // re-renders the title element (SPA navigation) and moves/replaces it.
+        if (panel.nextElementSibling !== titleAnchor || panel.parentElement !== titleAnchor.parentElement) {
+            titleAnchor.parentElement.insertBefore(panel, titleAnchor);
         }
 
         const levels = entries.map((d) => d.quality);
@@ -164,11 +166,19 @@
         markActive(panel, current);
     }
 
+    function getTitleAnchor() {
+        return (
+            document.querySelector('ytd-watch-metadata #title') ||
+            document.querySelector('#title.ytd-watch-metadata') ||
+            document.querySelector('#below #title')
+        );
+    }
+
     function tryInit() {
         const player = getPlayer();
-        const container = document.querySelector('.html5-video-player');
-        if (!player || !container) return;
-        buildPanel(player, container);
+        const titleAnchor = getTitleAnchor();
+        if (!player || !titleAnchor) return;
+        buildPanel(player, titleAnchor);
     }
 
     let pollTimer = null;
